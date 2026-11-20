@@ -1,0 +1,286 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Particle Portrait Hero</title>
+<style>
+  /* ---------- 1. BASE ---------- */
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: #000;
+    color: #fff;
+    font-family: "Inter", system-ui, sans-serif;
+    overflow-x: hidden;
+  }
+
+  /* ---------- 2. HERO LAYOUT ---------- */
+  .hero {
+    position: relative;
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 90px 16px 40px;
+  }
+
+  /* The canvas draws the particle portrait + HUD lines */
+  #portrait {
+    width: min(1000px, 100%);
+    height: min(500px, 62vh);
+    display: block;
+    cursor: crosshair;
+  }
+
+  .nav {
+    position: absolute; top: 0; left: 0; right: 0;
+    display: flex; justify-content: space-between; align-items: center;
+    padding: 24px clamp(16px, 4vw, 64px);
+  }
+  .logo { font-weight: 800; font-size: 22px; letter-spacing: -0.5px; }
+  .talk {
+    border: 1px solid #333; border-radius: 999px; padding: 12px 26px;
+    color: #fff; text-decoration: none; font-weight: 600; font-size: 15px;
+  }
+
+  .intro {
+    max-width: 760px; text-align: center; font-size: 18px; line-height: 1.5;
+    margin-top: 24px; opacity: 0; transform: translateY(16px);
+    animation: rise .9s 1.6s forwards;
+  }
+  .ctas {
+    display: flex; gap: 16px; margin-top: 28px; flex-wrap: wrap; justify-content: center;
+    opacity: 0; animation: rise .9s 1.8s forwards;
+  }
+  .btn {
+    width: 220px; padding: 18px 0; border-radius: 999px; text-align: center;
+    font-weight: 600; letter-spacing: .5px; text-decoration: none;
+    border: 1px solid #333; color: #fff; transition: .25s;
+  }
+  .btn.primary { background: #fff; color: #000; }
+  .btn:hover { transform: translateY(-2px); }
+
+  @keyframes rise { to { opacity: 1; transform: none; } }
+</style>
+</head>
+<body>
+
+<section class="hero">
+  <nav class="nav">
+    <div class="logo">USAMA DESIGN</div>
+    <a class="talk" href="#contact">Let's Talk</a>
+  </nav>
+
+  <canvas id="portrait"></canvas>
+
+  <p class="intro">
+    I'm Usama, UI/UX &amp; Product Designer with 4+ years of experience building
+    digital products across fintech, investing &amp; health tech.
+  </p>
+  <div class="ctas">
+    <a class="btn primary" href="#work">MY WORK</a>
+    <a class="btn" href="#resume">MY RESUME</a>
+  </div>
+</section>
+
+<script>
+/* =============================================================
+   PARTICLE PORTRAIT + HUD  —  how it works
+   1. Draw the photo to a hidden canvas and read its pixels.
+   2. Every Nth bright pixel becomes a particle with a "home" spot.
+   3. Each frame: particles spring back home, but the mouse pushes
+      them away (and they glow while displaced).
+   4. On load they fly in from wavy "smoke" trails.
+   5. A HUD layer draws nodes, labels and connecting lines on top.
+   ============================================================= */
+
+const IMAGE_SRC = "portrait.jpg";   // <- swap with your own photo (dark background works best)
+
+const CONFIG = {
+  gap: 2,            // sample every N px (smaller = more particles, heavier)
+  size: 2,           // particle size in px (match gap for a solid image)
+  mouseRadius: 60,   // how far the cursor reaches
+  force: 3.5,        // how hard the cursor pushes
+  spring: 0.035,     // how fast particles return home (lower = longer smoke trail)
+  friction: 0.9,     // velocity damping
+  threshold: 14,     // ignore pixels darker than this (removes background)
+  boost: 1.5         // brighten the photo (high-contrast look)
+};
+
+const canvas = document.getElementById("portrait");
+const ctx = canvas.getContext("2d");
+const dpr = Math.min(window.devicePixelRatio || 1, 2);
+let W, H, particles = [], nodes = [], box = { x: 0, y: 0, w: 0, h: 0 };
+const mouse = { x: -9999, y: -9999 };
+
+/* ---------- Particle ---------- */
+class Particle {
+  constructor(hx, hy, r, g, b, i, total) {
+    this.hx = hx; this.hy = hy;           // home position
+    this.r = r; this.g = g; this.b = b;   // original colour
+    // Intro: start somewhere along a sine "smoke" ribbon off to the side
+    const t = i / total;
+    const side = Math.random() < 0.5 ? -1 : 1;
+    this.x = W / 2 + side * (W * 0.3 + Math.sin(t * 12 + side) * 50);
+    this.y = t * H;
+    this.vx = 0; this.vy = 0;
+    this.delay = Math.random() * 60;      // staggered arrival (frames)
+  }
+  update() {
+    if (this.delay > 0) { this.delay--; return; }
+
+    // Mouse repulsion
+    const dx = this.x - mouse.x, dy = this.y - mouse.y;
+    const dist = Math.hypot(dx, dy);
+    if (dist < CONFIG.mouseRadius) {
+      const f = (1 - dist / CONFIG.mouseRadius) * CONFIG.force;
+      const a = Math.atan2(dy, dx) + (Math.random() - 0.5) * 0.8; // a bit of chaos
+      this.vx += Math.cos(a) * f;
+      this.vy += Math.sin(a) * f;
+    }
+    // Spring back home
+    this.vx += (this.hx - this.x) * CONFIG.spring;
+    this.vy += (this.hy - this.y) * CONFIG.spring;
+    this.vx *= CONFIG.friction;
+    this.vy *= CONFIG.friction;
+    this.x += this.vx; this.y += this.vy;
+  }
+  draw(img) {
+    // Displaced particles glow warm-white, like the reference video
+    const off = Math.min(Math.hypot(this.x - this.hx, this.y - this.hy) / 12, 1);
+    const r = this.r + (255 - this.r) * off;
+    const g = this.g + (235 - this.g) * off;
+    const b = this.b + (215 - this.b) * off;
+    // write straight into ImageData (much faster than fillRect per particle)
+    const px = (this.x * dpr) | 0, py = (this.y * dpr) | 0;
+    const s = Math.max(1, (CONFIG.size * dpr) | 0);
+    for (let oy = 0; oy < s; oy++) for (let ox = 0; ox < s; ox++) {
+      const X = px + ox, Y = py + oy;
+      if (X < 0 || Y < 0 || X >= img.width || Y >= img.height) continue;
+      const k = (Y * img.width + X) * 4;
+      img.data[k] = r; img.data[k + 1] = g; img.data[k + 2] = b; img.data[k + 3] = 255;
+    }
+  }
+}
+
+/* ---------- HUD nodes (the floating coordinates) ---------- */
+function makeNodes() {
+  // positions are relative to the PHOTO (0..1, can go outside). Tweak freely.
+  const spots = [
+    [-0.25,0.18],[0.62,0.10],[0.66,0.34],[0.95,0.44],[1.25,0.30],
+    [-0.15,0.70],[0.62,0.62],[0.60,0.75],[1.05,0.78],[0.68,0.03],[0.40,0.36]
+  ];
+  nodes = spots.map(([x, y], i) => ({
+    bx: box.x + x * box.w, by: box.y + y * box.h, x: 0, y: 0,
+    id: String(i + 2).padStart(2, "0"),
+    v: [Math.random()*2-1, Math.random()*2-1, Math.random()*2-1],
+    seed: Math.random() * 100
+  }));
+}
+const links = [[0,6],[1,2],[2,3],[3,4],[2,10],[10,3],[5,6],[6,7],[7,8],[3,8],[9,1],[10,7],[0,10]];
+const fmt = n => (n >= 0 ? "+" : "") + n.toFixed(2);
+
+function drawHUD(time) {
+  ctx.font = "10px ui-monospace, Menlo, monospace";
+  ctx.lineWidth = 0.6;
+  nodes.forEach(n => {
+    // gentle drift + parallax toward the mouse
+    const px = mouse.x > -999 ? (mouse.x - W/2) * 0.02 : 0;
+    const py = mouse.y > -999 ? (mouse.y - H/2) * 0.02 : 0;
+    n.x = n.bx + Math.sin(time / 1400 + n.seed) * 4 + px;
+    n.y = n.by + Math.cos(time / 1700 + n.seed) * 4 + py;
+    // values slowly wander — gives the "live tracking data" feel
+    n.v = n.v.map((v, i) => v + Math.sin(time / 900 + n.seed + i) * 0.002);
+  });
+
+  ctx.strokeStyle = "rgba(255,255,255,0.28)";
+  ctx.beginPath();
+  links.forEach(([a, b]) => { ctx.moveTo(nodes[a].x, nodes[a].y); ctx.lineTo(nodes[b].x, nodes[b].y); });
+  ctx.stroke();
+
+  nodes.forEach(n => {
+    // little corner brackets
+    ctx.strokeStyle = "rgba(255,255,255,0.7)";
+    ctx.beginPath();
+    ctx.moveTo(n.x - 4, n.y - 1); ctx.lineTo(n.x - 4, n.y - 4); ctx.lineTo(n.x - 1, n.y - 4);
+    ctx.moveTo(n.x - 4, n.y + 1); ctx.lineTo(n.x - 4, n.y + 4); ctx.lineTo(n.x - 1, n.y + 4);
+    ctx.stroke();
+    ctx.fillStyle = "rgba(255,255,255,0.85)";
+    ctx.fillText(`${n.id} ${fmt(n.v[0])} ${fmt(n.v[1])} ${fmt(n.v[2])}`, n.x + 6, n.y + 3);
+  });
+
+  // cursor ring
+  if (mouse.x > -999) {
+    ctx.strokeStyle = "rgba(255,255,255,0.8)";
+    ctx.beginPath(); ctx.arc(mouse.x, mouse.y, 7, 0, Math.PI * 2); ctx.stroke();
+    ctx.beginPath(); ctx.arc(mouse.x, mouse.y, 1.5, 0, Math.PI * 2); ctx.fill();
+  }
+}
+
+/* ---------- Build particles from the image ---------- */
+function build(img) {
+  const rect = canvas.getBoundingClientRect();
+  W = rect.width; H = rect.height;
+  canvas.width = W * dpr; canvas.height = H * dpr;
+
+  // fit image inside canvas height, centered
+  const scale = Math.min(H / img.height, W / img.width);
+  const iw = img.width * scale, ih = img.height * scale;
+  const ox = (W - iw) / 2, oy = (H - ih) / 2;
+  box = { x: ox, y: oy, w: iw, h: ih };
+
+  const off = document.createElement("canvas");
+  off.width = iw | 0; off.height = ih | 0;
+  const octx = off.getContext("2d");
+  octx.drawImage(img, 0, 0, off.width, off.height);
+  const data = octx.getImageData(0, 0, off.width, off.height).data;
+
+  const pts = [];
+  for (let y = 0; y < off.height; y += CONFIG.gap) {
+    for (let x = 0; x < off.width; x += CONFIG.gap) {
+      const k = (y * off.width + x) * 4;
+      const r = data[k], g = data[k+1], b = data[k+2];
+      if ((r + g + b) / 3 > CONFIG.threshold) {
+        const c = v => Math.min(255, v * CONFIG.boost);
+        pts.push([x + ox, y + oy, c(r), c(g), c(b)]);
+      }
+    }
+  }
+  particles = pts.map((p, i) => new Particle(p[0], p[1], p[2], p[3], p[4], i, pts.length));
+  makeNodes();
+}
+
+/* ---------- Loop ---------- */
+function loop(time) {
+  const imgData = ctx.createImageData(canvas.width, canvas.height);
+  for (const p of particles) { p.update(); p.draw(imgData); }
+  ctx.putImageData(imgData, 0, 0);
+
+  ctx.save(); ctx.scale(dpr, dpr);
+  drawHUD(time);
+  ctx.restore();
+  requestAnimationFrame(loop);
+}
+
+/* ---------- Events ---------- */
+function setMouse(e) {
+  const r = canvas.getBoundingClientRect();
+  const pt = e.touches ? e.touches[0] : e;
+  mouse.x = pt.clientX - r.left; mouse.y = pt.clientY - r.top;
+}
+canvas.addEventListener("mousemove", setMouse);
+canvas.addEventListener("touchmove", setMouse, { passive: true });
+canvas.addEventListener("mouseleave", () => { mouse.x = mouse.y = -9999; });
+canvas.addEventListener("touchend",   () => { mouse.x = mouse.y = -9999; });
+
+const photo = new Image();
+photo.src = IMAGE_SRC;
+photo.onload = () => {
+  build(photo);
+  requestAnimationFrame(loop);
+  let t; addEventListener("resize", () => { clearTimeout(t); t = setTimeout(() => build(photo), 200); });
+};
+</script>
+</body>
+</html>
